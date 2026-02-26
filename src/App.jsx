@@ -4,15 +4,17 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 const API_URL = "https://script.google.com/macros/s/AKfycbynZ_pJpYYjDDMdKDbgbZlCvCJtHu41viiuiGjtVLAynIB1HUjA1HbCGx7jt5bRXxOY4A/exec";
 
 async function apiGet() {
-  const res = await fetch(`${API_URL}?action=getAll`);
-  return res.json();
+  try {
+    const res = await fetch(`${API_URL}?action=getAll`, { redirect: 'follow' });
+    return res.json();
+  } catch(e) { return { error: e.toString() }; }
 }
 async function apiSave(data) {
-  const body = new FormData();
-  body.append("action", "saveAll");
-  body.append("data", JSON.stringify(data));
-  const res = await fetch(API_URL, { method: "POST", body });
-  return res.json();
+  try {
+    const encoded = encodeURIComponent(JSON.stringify(data));
+    const res = await fetch(`${API_URL}?action=saveAll&data=${encoded}`, { redirect: 'follow' });
+    return res.json();
+  } catch(e) { return { error: e.toString() }; }
 }
 
 // ── 공휴일 ───────────────────────────────────────────
