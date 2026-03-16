@@ -38,6 +38,7 @@ const isWorkDay = (d) => d.getDay()!==0 && d.getDay()!==6 && !KR_HOLIDAYS.has(dK
 // ── 날짜 정규화 ──────────────────────────────────────
 const normDate = (v) => {
   try {
+    if (v instanceof Date) { try { return dKey(v); } catch(e) { return ''; } }
     if (!v && v!==0) return '';
     const s = String(v).trim();
     if (!s||s==='undefined'||s==='null') return '';
