@@ -198,6 +198,8 @@ export default function App(){
 
   // ── UI ──────────────────────────────────────────────
   const [panelOpen, setPanelOpen] =useState(true);
+  const [isFullscreen,setIsFullscreen]=useState(false);
+  const [workerCollapsed,setWorkerCollapsed]=useState(false);
   const [selected,  setSelected]  =useState(null);
   const [editMode,  setEditMode]  =useState(false);
   const [inactiveOpen,setInactiveOpen]=useState(false);
@@ -242,6 +244,23 @@ export default function App(){
   const isPan      =useRef(false);
   const panStartX  =useRef(0);
   const panStartSL =useRef(0);
+  const panStartST =useRef(0);
+
+  // ── 전체화면 토글 ────────────────────────────────────
+  const toggleFullscreen=useCallback(()=>{
+    try{
+      if(!document.fullscreenElement){
+        document.documentElement.requestFullscreen().then(()=>setIsFullscreen(true)).catch(()=>{});
+      }else{
+        document.exitFullscreen().then(()=>setIsFullscreen(false)).catch(()=>{});
+      }
+    }catch(e){}
+  },[]);
+  useEffect(()=>{
+    const h=()=>setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange',h);
+    return()=>document.removeEventListener('fullscreenchange',h);
+  },[]);
 
   // ── 비밀번호 확인 ────────────────────────────────────
   const checkPw=()=>{
@@ -460,11 +479,14 @@ export default function App(){
 
   // ── 전역 마우스 이동 ─────────────────────────────────
   const onGlobalMouseMove=useCallback((e)=>{
-    // 패닝
+    // 패닝 (좌우 + 상하)
     if(isPan.current&&ganttRef.current){
       const newSL=Math.max(0,panStartSL.current+(panStartX.current-e.clientX));
+      const newST=Math.max(0,panStartST.current+(panStartY.current-e.clientY));
       ganttRef.current.scrollLeft=newSL;
+      ganttRef.current.scrollTop=newST;
       if(dateHdrRef.current)dateHdrRef.current.scrollLeft=newSL;
+      if(workerRef.current)workerRef.current.scrollTop=newST;
     }
     // 날짜 이동 드래그
     if(dragging&&moveMode?.type==='date'&&ganttRef.current){
@@ -503,13 +525,17 @@ export default function App(){
     }
   },[dragging,moveMode,dragTargetWid,schedules]);
 
+  const panStartY  =useRef(0);
+
   // ── 간트 패닝 시작 ────────────────────────────────────
   const onGanttMouseDown=(e)=>{
     if(e.button!==0)return;
     if(e.target.closest('.sch-block')||e.target.closest('.unavail-block'))return;
     isPan.current=true;
     panStartX.current=e.clientX;
+    panStartY.current=e.clientY;
     panStartSL.current=ganttRef.current?.scrollLeft||0;
+    panStartST.current=ganttRef.current?.scrollTop||0;
   };
 
   // ── 우클릭 메뉴 ──────────────────────────────────────
@@ -528,11 +554,19 @@ export default function App(){
   const onRowDragOver=(e)=>{if(dragWait!==null)e.preventDefault();};
   const onRowDrop=(e,wid)=>{
     if(dragWait===null||!ganttRef.current)return;e.preventDefault();
-    const sw=Math.max(0,Math.min(TWD-1,Math.round((e.clientX-ganttRef.current.getBoundingClientRect().left+ganttRef.current.scrollLeft)/dayW)));
     const wc=waiting.find(w=>w&&w.id===dragWait);if(!wc)return;
+    // ★ 서비스시작일이 있으면 그 날짜로, 없으면 드롭 위치로
+    let sw;
+    if(wc.serviceStart){
+      sw=dateToWd(wc.serviceStart);
+    }else{
+      sw=Math.max(0,Math.min(TWD-1,Math.round((e.clientX-ganttRef.current.getBoundingClientRect().left+ganttRef.current.scrollLeft)/dayW)));
+    }
     const newSch=autoStatus({id:_sid++,wid,client:wc.name||'',startWd:sw,durWd:wc.durWd||10,status:'hope',memo:wc.memo||'',expectedBirth:wc.expectedBirth||'',serviceStart:wc.serviceStart||'',birthConfirm:false,firstVisit:false,midCheck:false,happycall:false});
     setSch(p=>[...p,newSch]);
     setWait(p=>p.filter(w=>w&&w.id!==dragWait));setDragWait(null);
+    // ★ 배정 후 해당 날짜로 화면 이동
+    setTimeout(()=>scrollToWd(sw),100);
     if(checkUnavailConflict(wid,sw,wc.durWd||10)){setWarnMsg('⚠️ 해당 기간에 근무불가 일정이 있습니다!');setTimeout(()=>setWarnMsg(''),5000);}
   };
 
@@ -625,7 +659,7 @@ export default function App(){
           {panelOpen?'◀':'▶'}
         </button>
         <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
-          <div style={{width:22,height:22,borderRadius:6,background:'linear-gradient(135deg,#3b82f6,#6366f1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,color:'#fff',fontWeight:800}}>♡</div>
+          <div onClick={toggleFullscreen} style={{width:22,height:22,borderRadius:6,background:'linear-gradient(135deg,#3b82f6,#6366f1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,color:'#fff',fontWeight:800,cursor:'pointer',flexShrink:0}} title={isFullscreen?'전체화면 해제':'전체화면'}>{isFullscreen?'✕':'♡'}</div>
           <span style={{fontWeight:800,fontSize:13,letterSpacing:'-0.5px',whiteSpace:'nowrap'}}>산모신생아 인력 현황판</span>
         </div>
         <div style={{position:'relative',width:190,flexShrink:0}}>
@@ -692,9 +726,10 @@ export default function App(){
                 {/* ★ 시작일 변경 시 간트 일정바도 이동 */}
                 <input type="date" value={selSch.serviceStart||''} onChange={e=>{
                   const nd=e.target.value;
+                  if(!nd)return updSch({serviceStart:nd});
                   const newWd=dateToWd(nd);
                   updSch({serviceStart:nd,startWd:newWd});
-                  setTimeout(()=>scrollToWd(newWd),100);
+                  scrollToWd(newWd);
                 }} style={{width:'100%',padding:'2px 3px',border:'1px solid #c7d2fe',borderRadius:5,fontSize:9,background:'#f0f0ff'}}/>
               </div>
             </div>
@@ -788,7 +823,7 @@ export default function App(){
         <div ref={wrapRef} style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',minWidth:0}}>
           {/* 스크롤바 */}
           <div style={{display:'flex',height:20,flexShrink:0,background:'#f8fafc',borderBottom:'1px solid #e2e8f0',zIndex:16}}>
-            <div style={{width:WORKER_W,flexShrink:0,borderRight:'1px solid #e2e8f0'}}/>
+            <div style={{width:workerCollapsed?36:WORKER_W,flexShrink:0,borderRight:'1px solid #e2e8f0',transition:'width 0.2s ease'}}/>
             <div style={{flex:1,display:'flex',alignItems:'center',padding:'0 8px'}}>
               <div ref={sbRef}
                 onClick={e=>{if(!sbRef.current||sbDrag)return;const r=Math.max(0,Math.min(1,(e.clientX-sbRef.current.getBoundingClientRect().left-thumbW/2)/(ganttVW-thumbW)));const sl=r*(totalW-ganttVW);if(ganttRef.current)ganttRef.current.scrollLeft=sl;if(dateHdrRef.current)dateHdrRef.current.scrollLeft=sl;}}
@@ -802,9 +837,12 @@ export default function App(){
 
           {/* 날짜 헤더 */}
           <div style={{display:'flex',height:DATE_H,flexShrink:0,zIndex:15,background:'#fff',borderBottom:'1px solid #e2e8f0',boxShadow:'0 2px 4px rgba(0,0,0,0.04)'}}>
-            <div style={{width:WORKER_W,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 7px 0 9px',borderRight:'1px solid #e2e8f0',background:'#f8fafc'}}>
-              <span style={{fontSize:11,fontWeight:800,color:'#64748b'}}>관리사</span>
-              <button onClick={()=>setAddWOpen(v=>!v)} style={{padding:'2px 7px',borderRadius:5,fontSize:10,fontWeight:700,border:'1.5px solid #3b82f6',background:addWOpen?'#3b82f6':'#eff6ff',color:addWOpen?'#fff':'#1d4ed8',cursor:'pointer'}}>+ 추가</button>
+            <div style={{width:workerCollapsed?36:WORKER_W,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 4px 0 5px',borderRight:'1px solid #e2e8f0',background:'#f8fafc',transition:'width 0.2s ease',overflow:'hidden'}}>
+              {!workerCollapsed&&<span style={{fontSize:11,fontWeight:800,color:'#64748b'}}>관리사</span>}
+              <div style={{display:'flex',gap:2,marginLeft:'auto'}}>
+                {!workerCollapsed&&<button onClick={()=>setAddWOpen(v=>!v)} style={{padding:'2px 5px',borderRadius:5,fontSize:10,fontWeight:700,border:'1.5px solid #3b82f6',background:addWOpen?'#3b82f6':'#eff6ff',color:addWOpen?'#fff':'#1d4ed8',cursor:'pointer'}}>+</button>}
+                <button onClick={()=>setWorkerCollapsed(v=>!v)} title={workerCollapsed?'관리사 이름 펼치기':'이름만 보기'} style={{padding:'2px 4px',borderRadius:5,fontSize:10,fontWeight:700,border:'1.5px solid #e2e8f0',background:'#f8fafc',color:'#64748b',cursor:'pointer'}}>{workerCollapsed?'▶':'◀'}</button>
+              </div>
             </div>
             <div ref={dateHdrRef} style={{flex:1,overflowX:'hidden',overflowY:'hidden',background:'#f8fafc'}}>
               <div style={{width:TWD*dayW,display:'flex',height:'100%'}}>
@@ -824,7 +862,7 @@ export default function App(){
           {/* 관리사 + 간트 본문 */}
           <div style={{display:'flex',flex:1,overflow:'hidden',minHeight:0}}>
             {/* 관리사 열 */}
-            <div ref={workerRef} onScroll={onWScroll} className="scroll-y" style={{width:WORKER_W,flexShrink:0,background:'#fff',borderRight:'1px solid #e2e8f0',overflowX:'hidden'}}>
+            <div ref={workerRef} onScroll={onWScroll} className="scroll-y" style={{width:workerCollapsed?36:WORKER_W,flexShrink:0,background:'#fff',borderRight:'1px solid #e2e8f0',overflowX:'hidden',transition:'width 0.2s ease'}}>
               {visibleW.map((w,i)=>{
                 if(!w)return null;
                 const g=GROUPS.find(g=>g.id===w.group)||GROUPS[0],prev=visibleW[i-1],showSep=!prev||prev.group!==w.group,isEdit=editWId===w.id;
@@ -834,8 +872,14 @@ export default function App(){
                 return(
                   <div key={w.id}>
                     {showSep&&<div style={{height:3,background:`linear-gradient(90deg,${g.accent}55,transparent)`,borderTop:i>0?`2px solid ${g.accent}44`:'none'}}/>}
-                    <div className="wrow" style={{height:ROW_H,display:'flex',alignItems:'center',padding:'0 5px',borderBottom:'1px solid #f1f5f9',background:isDropTarget?'#dcfce7':isMatch?'#fef9c3':i%2===0?g.bgRow:g.bgAlt,gap:3,position:'relative',outline:isDropTarget?'2px solid #22c55e':'none'}} onMouseEnter={()=>{setHoverWId(w.id);if(moveMode?.type==='worker'&&dragging)setDragTargetWid(w.id);}} onMouseLeave={()=>setHoverWId(null)}>
-                      {isEdit?(
+                    <div className="wrow" style={{height:ROW_H,display:'flex',alignItems:'center',padding:'0 3px',borderBottom:'1px solid #f1f5f9',background:isDropTarget?'#dcfce7':isMatch?'#fef9c3':i%2===0?g.bgRow:g.bgAlt,gap:2,position:'relative',outline:isDropTarget?'2px solid #22c55e':'none'}} onMouseEnter={()=>{setHoverWId(w.id);if(moveMode?.type==='worker'&&dragging)setDragTargetWid(w.id);}} onMouseLeave={()=>setHoverWId(null)}>
+                      {workerCollapsed?(
+                        // 축소 모드: 색상 바 + 이름 첫글자만
+                        <div title={`${w.name} ${w.area}`} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:0}}>
+                          <div style={{width:3,height:16,borderRadius:2,background:g.accent,flexShrink:0,marginRight:2}}/>
+                          <span style={{fontSize:9,fontWeight:700,color:'#334155',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',maxWidth:24}}>{w.name.charAt(0)}</span>
+                        </div>
+                      ):isEdit?(
                         <><input value={editWVal.name} onChange={e=>setEditWVal(p=>({...p,name:e.target.value}))} style={{width:42,padding:'2px 3px',border:'1px solid #93c5fd',borderRadius:4,fontSize:10}}/><input value={editWVal.area} onChange={e=>setEditWVal(p=>({...p,area:e.target.value}))} style={{flex:1,padding:'2px 3px',border:'1px solid #93c5fd',borderRadius:4,fontSize:9,minWidth:0}}/><select value={editWVal.group} onChange={e=>setEditWVal(p=>({...p,group:+e.target.value}))} style={{width:22,padding:'1px',border:'1px solid #93c5fd',borderRadius:3,fontSize:9}}>{[1,2,3,4].map(n=><option key={n} value={n}>{n}</option>)}</select><button onClick={()=>saveEdit(w.id)} style={{padding:'1px 3px',borderRadius:3,background:'#3b82f6',color:'#fff',border:'none',cursor:'pointer',fontSize:9}}>✓</button><button onClick={()=>setEditWId(null)} style={{padding:'1px 3px',borderRadius:3,background:'#e2e8f0',color:'#475569',border:'none',cursor:'pointer',fontSize:9}}>✗</button></>
                       ):(
                         <><div style={{width:3,height:16,borderRadius:2,background:g.accent,flexShrink:0}}/>
@@ -852,7 +896,7 @@ export default function App(){
                   </div>
                 );
               })}
-              {inactiveW.length>0&&<button onClick={()=>setInactiveOpen(v=>!v)} style={{width:'100%',height:24,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 10px',background:'#f1f5f9',border:'none',borderTop:'2px dashed #cbd5e1',cursor:'pointer',fontSize:10,fontWeight:700,color:'#64748b'}}><span>📁 비활성 ({inactiveW.length}명)</span><span>{inactiveOpen?'▲':'▼'}</span></button>}
+              {inactiveW.length>0&&<button onClick={()=>setInactiveOpen(v=>!v)} style={{width:'100%',height:24,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 6px',background:'#f1f5f9',border:'none',borderTop:'2px dashed #cbd5e1',cursor:'pointer',fontSize:10,fontWeight:700,color:'#64748b'}}>{workerCollapsed?<span>📁</span>:<><span>📁 비활성 ({inactiveW.length}명)</span><span>{inactiveOpen?'▲':'▼'}</span></>}</button>}
             </div>
 
             {/* 간트 본문 */}
@@ -919,6 +963,8 @@ export default function App(){
                   );
                 })}
                 {inactiveW.length>0&&<div style={{height:24,background:'#f1f5f9',borderTop:'2px dashed #cbd5e1'}}/>}
+                {/* ★ 하단 여백 */}
+                <div style={{height:ROW_H*2}}/>
               </div>
             </div>
           </div>
